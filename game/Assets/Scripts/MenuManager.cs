@@ -101,6 +101,18 @@ public class MenuManager : MonoBehaviour
         });
     }
 
+    // [DllImport("__Internal")]
+    // private static extern void CopyToClipboard(string str);
+
+#if UNITY_WEBGL && !UNITY_EDITOR
     [DllImport("__Internal")]
     private static extern void CopyToClipboard(string str);
+#else
+
+    /// <summary>Copy text to the clipboard on all platforms.</summary>
+    public static void CopyToClipboard(string text)
+    {
+        GUIUtility.systemCopyBuffer = text;
+    }
+#endif
 }

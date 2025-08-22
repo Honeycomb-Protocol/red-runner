@@ -4,9 +4,9 @@ using System.Text.RegularExpressions;
 public static class StaticDataBank
 {
     #region BackEnd Keys
-    public static readonly string FireBase_Web_API_Key = "AIzaSyDd8TaOxZT_tit1Wh5GmBOzYZdoKMMZ6pI";
-    public static readonly string clientId = "3228064304-bh62c6vvtcmqm8c2viecnondtrpn5nbq.apps.googleusercontent.com";
-    public static readonly string clientSecret = "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";
+    public static readonly string FireBase_Web_API_Key = "AIzaSyA1XOUyK4kksadk0MTOc_L25qcgMmruGKo";
+    public static readonly string clientId = "713724247097-hnap0s2devatbplgk9pjo8hconih6dhu.apps.googleusercontent.com";
+    public static readonly string clientSecret = "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";
     //public static readonly string clientId = "283391004653-4e9vpcvs2ftrnpuebag6gva9814mc3i3.apps.googleusercontent.com";
     //public static readonly string clientSecret = "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";
 
@@ -25,8 +25,10 @@ public static class StaticDataBank
 
     #region Backend Api's
 
-    // public static readonly string SOCKET_URL = "http://localhost:3000";
-    public static readonly string SOCKET_URL = "https://red-runner-monorepo-952100349016.us-central1.run.app";
+    // public static readonly string SOCKET_URL = "http://10.0.2.2:3000";
+    public static readonly string SOCKET_URL = "http://localhost:3000";
+    // public static readonly string SOCKET_URL = "https://red-runner-monorepo-952100349016.us-central1.run.app";
+    // public static readonly string SOCKET_URL = "https://red-runner-monorepo-952100349016.us-central1.run.app";
 
     public static readonly string QR_SOCKET_URL = SOCKET_URL + "/qr-signup";
     public static readonly string BackendBaseUrl = SOCKET_URL + "/v1/";

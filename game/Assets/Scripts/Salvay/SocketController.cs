@@ -86,6 +86,7 @@ public class SocketController : SingletonBase<SocketController>
     private void OnSocketEvent()
     {
         SocketEventsType currentType = (SocketEventsType)Enum.Parse(typeof(SocketEventsType), _manager.Socket.CurrentPacket.EventName);
+        Debug.Log("Socket event received: " + currentType);
         switch (currentType)
         {
             case SocketEventsType.paymentInitiated:

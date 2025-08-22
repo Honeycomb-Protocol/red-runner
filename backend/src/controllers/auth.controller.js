@@ -66,6 +66,7 @@ const registerOrLogin = catchAsync(async (req, res) => {
     } else {
       res.status(httpStatus.INTERNAL_SERVER_ERROR).send({ message: e.message });
     }
+    console.log('Error in registerOrLogin:', e);
   }
 });
 

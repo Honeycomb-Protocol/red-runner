@@ -215,7 +215,6 @@ const buyItem = catchAsync(async (req, res) => {
     const existingPayment = await paymentService.getPaymentByPaymentId(payment.data.id);
 
     if (existingPayment) {
-      console.log('Payment already exists, returning existing payment');
       return res.status(httpStatus.OK).send(payment.data);
     }
 

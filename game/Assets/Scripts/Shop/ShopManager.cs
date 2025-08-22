@@ -5,6 +5,9 @@ using Newtonsoft.Json.Linq;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+#if UNITY_2018_4_OR_NEWER
+using UnityEngine.Networking;
+#endif
 
 [Serializable]
 public class UIDataConatainer
@@ -17,20 +20,159 @@ public class UIDataConatainer
     public Image boosterImage;
 }
 
-
-public class ShopManager : MonoBehaviour
+public class ShopManager : MonoBehaviour, SocketEventListener
 {
     public static ShopManager Instance;
+
+    // --- WebView / UI ---
+    private WebViewObject webViewObject;
+    private GameObject webViewCanvas;
+    private Button closeWebViewButton;
+
+    // Reserve a top area so the native WebView (Android/WebGL) doesn't cover the close button.
+    [SerializeField] private int topBarHeightDp = 94;
+
+    // Track screen changes to reapply margins / reposition the close button
+    private int _lastW, _lastH;
+    private Rect _lastSafeArea;
+
     void Awake()
     {
-        if(Instance == null)
+        if (Instance == null)
         {
             Instance = this;
         }
     }
 
+    void Start()
+    {
+        SocketController.Instance.AddListener(this);
+        CreateWebViewCanvasWithCloseButton();
+
+        webViewObject = new GameObject("WebViewObject").AddComponent<WebViewObject>();
+        // Parenting is fine (for lifecycle), the plugin still renders natively/overlay.
+        webViewObject.transform.SetParent(webViewCanvas.transform, false);
+
+#if UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX || UNITY_IOS
+        // Required by gree/unity-webview on Apple platforms
+        webViewObject.canvas = webViewCanvas;
+#endif
+        // Initialize trackers
+        _lastW = Screen.width;
+        _lastH = Screen.height;
+        _lastSafeArea = Screen.safeArea;
+        PositionCloseButton(); // place X correctly considering safe area
+    }
+
+    // Create overlay canvas + close button
+    private void CreateWebViewCanvasWithCloseButton()
+    {
+        webViewCanvas = new GameObject("WebViewCanvas");
+        var canvas = webViewCanvas.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 10000; // ensure on top of other Unity UI
+        webViewCanvas.AddComponent<CanvasScaler>(); // default: constant pixel size
+        webViewCanvas.AddComponent<GraphicRaycaster>();
+
+        // Close button
+        GameObject closeBtnObj = new GameObject("CloseWebViewButton");
+        closeBtnObj.transform.SetParent(webViewCanvas.transform, false);
+        closeWebViewButton = closeBtnObj.AddComponent<Button>();
+        var image = closeBtnObj.AddComponent<Image>();
+        image.color = new Color(0.8f, 0f, 0f, 0.85f);
+
+        RectTransform rect = closeBtnObj.GetComponent<RectTransform>();
+        rect.anchorMin = new Vector2(1, 1);
+        rect.anchorMax = new Vector2(1, 1);
+        rect.pivot = new Vector2(1, 1);
+        rect.sizeDelta = new Vector2(60, 60);
+        // anchored position set in PositionCloseButton() so we can include safe area
+
+        GameObject textObj = new GameObject("Text");
+        textObj.transform.SetParent(closeBtnObj.transform, false);
+        var txt = textObj.AddComponent<TextMeshProUGUI>();
+        txt.text = "✖";
+        txt.alignment = TextAlignmentOptions.Center;
+        txt.fontSize = 36;
+        txt.color = Color.white;
+        RectTransform txtRect = textObj.GetComponent<RectTransform>();
+        txtRect.anchorMin = Vector2.zero;
+        txtRect.anchorMax = Vector2.one;
+        txtRect.offsetMin = Vector2.zero;
+        txtRect.offsetMax = Vector2.zero;
+
+        // Make sure the close button is last in hierarchy within this canvas
+        closeBtnObj.transform.SetAsLastSibling();
+
+        closeWebViewButton.onClick.AddListener(CloseWebView);
+        webViewCanvas.SetActive(false);
+    }
+
+    private void ShowWebViewCanvas(bool show)
+    {
+        if (webViewCanvas != null)
+            webViewCanvas.SetActive(show);
+    }
+
+    private void CloseWebView()
+    {
+        if (webViewObject != null)
+            webViewObject.SetVisibility(false);
+        ShowWebViewCanvas(false);
+    }
+
+    // --- Safe area helpers / margins ---
+
+    private int GetSafeTopPx()
+    {
+#if UNITY_ANDROID || UNITY_IOS
+        var sa = Screen.safeArea;
+        // Distance from top edge to safe area top in pixels:
+        return Mathf.RoundToInt(Screen.height - sa.yMax);
+#else
+        return 0;
+#endif
+    }
+
+    private void PositionCloseButton()
+    {
+        if (closeWebViewButton == null) return;
+        var rect = closeWebViewButton.GetComponent<RectTransform>();
+
+        int safeTop = GetSafeTopPx();
+        // Keep ~20px from edges, add safe area on top (so it's not under the notch/status bar)
+        rect.anchoredPosition = new Vector2(-20f, -(20f + safeTop));
+    }
+
+    private void ApplyWebViewMargins()
+    {
+        if (webViewObject == null) return;
+
+        // Convert dp to pixels (approx; Unity doesn't expose dp)
+        float scale = (Screen.dpi > 0f) ? (Screen.dpi / 160f) : 1f;
+        int topBarPx = Mathf.RoundToInt(topBarHeightDp * scale);
+
+        int safeTop = GetSafeTopPx();
+
+        // Left, Top, Right, Bottom
+        webViewObject.SetMargins(0, topBarPx + safeTop, 0, 0);
+    }
+
+    private void LateUpdate()
+    {
+        // If resolution or safe area changes (rotation, resize), reapply
+        if (_lastW != Screen.width || _lastH != Screen.height || _lastSafeArea != Screen.safeArea)
+        {
+            _lastW = Screen.width;
+            _lastH = Screen.height;
+            _lastSafeArea = Screen.safeArea;
+
+            PositionCloseButton();
+            ApplyWebViewMargins();
+        }
+    }
+
     [Header("Detail Panel UI")]
-    //public GameObject DetailPanel;
     public TextMeshProUGUI attribute;
     public TextMeshProUGUI BoosterName;
     public TextMeshProUGUI Description;
@@ -48,15 +190,18 @@ public class ShopManager : MonoBehaviour
 
     private string _selectedMintId;
 
+    private Coroutine _loadCoroutine;
+
     void HidePopUp()
     {
         UIManager.Instance.SelectDefaultFeatureWindowOption();
     }
-    void GetAllShopData(bool sucess, GameShop response)
+
+    void GetAllShopData(bool success, GameShop response)
     {
-        if (sucess)
+        if (success)
         {
-            if ((_gameShop!=null)&& _gameShop.boosters.speed_boosters.speed_booster_6.price.SOL == response.boosters.speed_boosters.speed_booster_6.price.SOL &&
+            if ((_gameShop != null) && _gameShop.boosters.speed_boosters.speed_booster_6.price.SOL == response.boosters.speed_boosters.speed_booster_6.price.SOL &&
                 _gameShop.boosters.double_jump_boosters.double_jump_3.price.SOL == response.boosters.double_jump_boosters.double_jump_3.price.SOL &&
                 _gameShop.skins.alienSkin.price.SOL == response.skins.alienSkin.price.SOL)
             {
@@ -64,9 +209,6 @@ public class ShopManager : MonoBehaviour
                 return;
             }
             _gameShop = response;
-            //StaticDataBank.SpeedBoosterCollectionID = _gameShop.boosters.speed_boosters.speed_booster_3.collectionId;
-            //StaticDataBank.DoubleJumpCollectionID = _gameShop.boosters.double_jump_boosters.double_jump_3.collectionId;
-            //StaticDataBank.SkinCollectionID = _gameShop.skins.alienSkin.collectionId;
             StartCoroutine(PopulateData());
         }
         else
@@ -74,21 +216,7 @@ public class ShopManager : MonoBehaviour
             UIManager.Instance.ActivateFailureScreen("shop");
         }
     }
-    //Sprite DownloadImage(string imageUrl)
-    //{
-    //    Sprite get_sprite = null;
-    //    API_Manager.Instance.DownloadImage(imageUrl, (success, m_sprite) => {
-    //        if (success)
-    //        {
-    //            m_sprite = get_sprite;
-    //        }
-    //        else
-    //        {
-    //            Debug.Log("Failed to fetch image");
-    //        }
-    //    });
-    //    return get_sprite;
-    //}
+
     IEnumerator PopulateData()
     {
         StartCoroutine(DownloadImage(_gameShop.boosters.double_jump_boosters.double_jump_3.imageUrl, _gameShop.boosters.double_jump_boosters.double_jump_3.name, _gameShop.boosters.double_jump_boosters.double_jump_3.price.SOL, _gameShop.boosters.double_jump_boosters.double_jump_3.price.USDC, _gameShop.boosters.double_jump_boosters.double_jump_3.attributes[0].value, doublejump[0]));
@@ -112,17 +240,17 @@ public class ShopManager : MonoBehaviour
         yield return new WaitForSecondsRealtime(1f);
         UIManager.Instance.SelectDefaultFeatureWindowOption();
     }
-    IEnumerator DownloadImage(string imageUrl, string imageName, string SOLPrice, string USDCPrice, string _UsesLeft,UIDataConatainer data)
+
+    IEnumerator DownloadImage(string imageUrl, string imageName, string SOLPrice, string USDCPrice, string _UsesLeft, UIDataConatainer data)
     {
         bool istartchecking = false;
-        GlobalFeaturesManager.Instance.ImageCache.DownloadImage(imageUrl, imageName,(m_sprite) => {
-            
+        GlobalFeaturesManager.Instance.ImageCache.DownloadImage(imageUrl, imageName, (m_sprite) =>
+        {
             istartchecking = true;
-            
             if (m_sprite != null)
             {
                 Sprite tempSprite = Sprite.Create(m_sprite, new Rect(0, 0, m_sprite.width, m_sprite.height), new Vector2(0.5f, 0.5f));
-                
+
                 if (spriteDictionary.ContainsKey(imageName))
                 {
                     spriteDictionary[imageName] = tempSprite;
@@ -136,8 +264,8 @@ public class ShopManager : MonoBehaviour
                 data.SOL_Price.text = SOLPrice;
                 data.USDC_Price.text = USDCPrice;
                 data.UsesLeft.text = _UsesLeft;
-                
-                if(imageName.Contains("Skin"))
+
+                if (imageName.Contains("Skin"))
                     data.boosterImage.SetNativeSize();
             }
             else
@@ -145,10 +273,10 @@ public class ShopManager : MonoBehaviour
                 Debug.Log("Failed to fetch image");
             }
         });
-        
+
         yield return new WaitUntil(() => istartchecking);
     }
-    
+
     public void GetSkinsDetails(int index)
     {
         switch (index)
@@ -195,7 +323,7 @@ public class ShopManager : MonoBehaviour
                 break;
         }
     }
-    
+
     public void GetSpeedBoostersDetails(int index)
     {
         switch (index)
@@ -216,30 +344,6 @@ public class ShopManager : MonoBehaviour
                 GameShop.Booster speed3 = _gameShop.boosters.speed_boosters.speed_booster_999;
                 ShowDetailPanel(speed3, "speed_booster_999");
                 break;
-
-        }
-    }
-    public void GetJumpBoostersDetails(int index)
-    {
-        switch (index)
-        {
-            case 0:
-                GameShop.Booster jump = _gameShop.boosters.double_jump_boosters.double_jump_3;
-                ShowDetailPanel(jump, "double_jump_3");
-                break;
-            case 1:
-                GameShop.Booster jump1 = _gameShop.boosters.double_jump_boosters.double_jump_6;
-                ShowDetailPanel(jump1, "double_jump_6");
-                break;
-            case 2:
-                GameShop.Booster jump2 = _gameShop.boosters.double_jump_boosters.double_jump_10;
-                ShowDetailPanel(jump2, "double_jump_10");
-                break;
-            case 3:
-                GameShop.Booster jump3 = _gameShop.boosters.double_jump_boosters.double_jump_999;
-                ShowDetailPanel(jump3, "double_jump_999");
-                break;
-
         }
     }
 
@@ -253,26 +357,18 @@ public class ShopManager : MonoBehaviour
         attribute.text = skin.attributes[0].traitType + ":" + skin.attributes[0].value;
         _selectedMintId = skin.attributes[0].value;
         DetailsBuyButtonPressed();
-
-        //MintButton.gameObject.SetActive(true);
-        //ListButton.gameObject.SetActive(false);
     }
+
     public void ShowDetailPanel(GameShop.Booster booster, string mintid)
     {
         if (spriteDictionary.ContainsKey(booster.name))
             boosterImage.sprite = spriteDictionary[booster.name];
-        
         boosterImage.SetNativeSize();
-        
-        //BoosterName.text = StaticDataBank.RemoveWordFromString(booster.name);
         BoosterName.text = booster.name;
         Description.text = booster.description;
         attribute.text = booster.attributes[0].traitType + ":" + booster.attributes[0].value;
         _selectedMintId = mintid;
         DetailsBuyButtonPressed();
-
-        //MintButton.gameObject.SetActive(true);
-        //ListButton.gameObject.SetActive(false);
     }
 
     public void DetailsBuyButtonPressed()
@@ -288,31 +384,38 @@ public class ShopManager : MonoBehaviour
         newPopupData.contentString = "Choose a currency to buy with";
         newPopupData.firstButtonString = "SOL";
         newPopupData.secondButtonString = "USD";
-        newPopupData.firstButtonCallBack = () => MintNft(MintID,true);
-        newPopupData.secondButtonCallBack = () => MintNft(MintID,false);
+        newPopupData.firstButtonCallBack = () => MintNft(MintID, true);
+        newPopupData.secondButtonCallBack = () => MintNft(MintID, false);
         GlobalCanvasManager.Instance.PopUIHandler.ShowPopup(newPopupData);
         GlobalCanvasManager.Instance.PopUIHandler.ToggleSpecialKillButton(true);
-        
     }
-    public void MintNft(string itemName,bool withSol)
+
+    private void OnDisable()
+    {
+        if (_loadCoroutine != null)
+        {
+            StopCoroutine(_loadCoroutine);
+        }
+    }
+
+    public void MintNft(string itemName, bool withSol)
     {
         GlobalCanvasManager.Instance.LoadingPanel.ShowPopup("Processing payment", 5,
-    new List<SocketEventsType> { SocketEventsType.paymentComplete });
-        
+            new List<SocketEventsType> { SocketEventsType.paymentComplete });
+
         Debug.Log("Item Name : " + itemName);
-        API_Manager.Instance.BuyNft(itemName,withSol, (success, message) =>
+        API_Manager.Instance.BuyNft(itemName, withSol, (success, message) =>
         {
             if (success)
             {
-                Utils.OpenURLInNewTab(message);
-                // Output the URL
+                ShowWebViewCanvas(true);
+                _loadCoroutine = StartCoroutine(LoadWebView(message));
                 Debug.Log("Checkout URL: " + message);
             }
             else
             {
                 Debug.Log(message);
                 GlobalCanvasManager.Instance.LoadingPanel.HidePopup();
-                
                 GlobalCanvasManager.Instance.PopUIHandler.ShowPopup(new PopupData()
                 {
                     titleString = "Error",
@@ -320,7 +423,7 @@ public class ShopManager : MonoBehaviour
                     firstButtonString = "OK",
                     firstButtonCallBack = null
                 });
-            } 
+            }
         });
     }
 
@@ -333,4 +436,188 @@ public class ShopManager : MonoBehaviour
     {
         API_Manager.Instance.GetShopData(GetAllShopData);
     }
+
+    // Load the page and make the webview visible
+    private IEnumerator LoadWebView(string Url)
+    {
+        webViewObject.Init(
+            cb: (msg) => { },
+            err: (msg) => { },
+            httpErr: (msg) => { },
+            started: (msg) => { },
+            hooked: (msg) => { },
+            cookies: (msg) => { },
+            ld: (msg) =>
+            {
+#if UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX || UNITY_IOS
+                var js = @"
+                    if (!(window.webkit && window.webkit.messageHandlers)) {
+                        window.Unity = {
+                            call: function(msg) {
+                                window.location = 'unity:' + msg;
+                            }
+                        };
+                    }
+                ";
+#else
+                var js = "";
+#endif
+                webViewObject.EvaluateJS(js + @"Unity.call('ua=' + navigator.userAgent)");
+            }
+        );
+
+        webViewObject.SetTextZoom(100);
+        ApplyWebViewMargins(); // <<< reserve the top area so the X is always visible
+
+#if !UNITY_WEBPLAYER && !UNITY_WEBGL
+        if (Url.StartsWith("http"))
+        {
+            webViewObject.LoadURL(Url.Replace(" ", "%20"));
+        }
+        else
+        {
+            var exts = new string[] { ".jpg", ".js", ".html" };
+            foreach (var ext in exts)
+            {
+                var url = Url.Replace(".html", ext);
+                var src = System.IO.Path.Combine(Application.streamingAssetsPath, url);
+                var dst = System.IO.Path.Combine(Application.temporaryCachePath, url);
+                byte[] result = null;
+                if (!src.Contains("://"))
+                {
+                    result = System.IO.File.ReadAllBytes(src);
+                }
+                System.IO.File.WriteAllBytes(dst, result);
+                if (ext == ".html")
+                {
+                    webViewObject.LoadURL("file://" + dst.Replace(" ", "%20"));
+                    break;
+                }
+            }
+        }
+#else
+        if (Url.StartsWith("http"))
+        {
+            webViewObject.LoadURL(Url.Replace(" ", "%20"));
+        }
+        else
+        {
+            webViewObject.LoadURL("StreamingAssets/" + Url.Replace(" ", "%20"));
+        }
+#endif
+
+        yield return null;
+
+        webViewObject.SetVisibility(true);
+        // Reapply margins in case resolution changed between init and first frame
+        ApplyWebViewMargins();
+    }
+
+    public void RemoveListener()
+    {
+        SocketController.Instance.RemoveListener(this);
+    }
+
+    private void OnDestroy()
+    {
+        RemoveListener();
+    }
+
+    void SocketEventListener.OnSocketMessageReceived(SocketEventsType messageHeader, string payLoad)
+    {
+        if (messageHeader == SocketEventsType.paymentComplete)
+        {
+            Debug.Log("Payment completed successfully.");
+            GlobalCanvasManager.Instance.LoadingPanel.HidePopup();
+            GlobalCanvasManager.Instance.PopUIHandler.ShowPopup(new PopupData()
+            {
+                titleString = "Success",
+                contentString = "Your purchase was successful!",
+                firstButtonString = "OK",
+                firstButtonCallBack = HidePopUp
+            });
+            CloseWebView();
+        }
+        else if (messageHeader == SocketEventsType.paymentFailed)
+        {
+            Debug.Log("Payment failed.");
+            GlobalCanvasManager.Instance.LoadingPanel.HidePopup();
+            GlobalCanvasManager.Instance.PopUIHandler.ShowPopup(new PopupData()
+            {
+                titleString = "Error",
+                contentString = "Payment failed. Please try again.",
+                firstButtonString = "OK",
+                firstButtonCallBack = HidePopUp
+            });
+            CloseWebView();
+        }
+    }
+
+    // Optional: back key closes the webview on Android
+    private void Update()
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        if (webViewCanvas != null && webViewCanvas.activeSelf && Input.GetKeyDown(KeyCode.Escape))
+        {
+            CloseWebView();
+        }
+#endif
+    }
+
+    //  void OnGUI()
+    // {
+    //     var x = 10;
+
+    //     GUI.enabled = (webViewObject == null) ? false : webViewObject.CanGoBack();
+    //     if (GUI.Button(new Rect(x, 10, 80, 80), "<")) {
+    //         webViewObject?.GoBack();
+    //     }
+    //     GUI.enabled = true;
+    //     x += 90;
+
+    //     GUI.enabled = (webViewObject == null) ? false : webViewObject.CanGoForward();
+    //     if (GUI.Button(new Rect(x, 10, 80, 80), ">")) {
+    //         webViewObject?.GoForward();
+    //     }
+    //     GUI.enabled = true;
+    //     x += 90;
+
+    //     if (GUI.Button(new Rect(x, 10, 80, 80), "r")) {
+    //         webViewObject?.Reload();
+    //     }
+    //     x += 90;
+
+    //     GUI.TextField(new Rect(x, 10, 180, 80), "" + ((webViewObject == null) ? 0 : webViewObject.Progress()));
+    //     x += 190;
+
+    //     if (GUI.Button(new Rect(x, 10, 80, 80), "*")) {
+    //         var g = GameObject.Find("WebViewObject");
+    //         if (g != null) {
+    //             Destroy(g);
+    //         } else {
+    //             StartCoroutine(Start());
+    //         }
+    //     }
+    //     x += 90;
+
+    //     if (GUI.Button(new Rect(x, 10, 80, 80), "c")) {
+    //         webViewObject?.GetCookies(Url);
+    //     }
+    //     x += 90;
+
+    //     if (GUI.Button(new Rect(x, 10, 80, 80), "x")) {
+    //         webViewObject?.ClearCookies();
+    //     }
+    //     x += 90;
+
+    //     if (GUI.Button(new Rect(x, 10, 80, 80), "D")) {
+    //         webViewObject?.SetInteractionEnabled(false);
+    //     }
+    //     x += 90;
+
+    //     if (GUI.Button(new Rect(x, 10, 80, 80), "E")) {
+    //         webViewObject?.SetInteractionEnabled(true);
+    //     }
+    //     x += 90;
+    // }
 }

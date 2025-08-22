@@ -6,6 +6,9 @@ const gsUtil = require('../utils/gsUtil');
 const httpStatus = require('http-status');
 const axios = require('axios');
 
+gameShiftSdk.server(config.gs.gsBaseUrl);
+gameShiftSdk.core.setServer(config.gs.gsBaseUrl)
+
 /**
  * Create a user
  * @returns {Promise<User>}
@@ -14,6 +17,11 @@ const axios = require('axios');
  */
 const registerUser = async (referenceId, emailId) => {
   try {
+    gameShiftSdk.server(config.gs.gsBaseUrl);
+  gameShiftSdk.core.setServer(config.gs.gsBaseUrl)
+  console.log("spcapi",gameShiftSdk.core.spec.api)
+    console.log("config.gs.gsBaseUrl", config.gs.gsBaseUrl);
+
     await gameShiftSdk.projectUserController_create(
       {
         referenceId: referenceId,

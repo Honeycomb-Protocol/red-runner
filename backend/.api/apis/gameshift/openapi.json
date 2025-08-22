@@ -13687,7 +13687,7 @@
   "tags": [],
   "servers": [
     {
-      "url": "https://api.gameshift.dev"
+      "url": "http://localhost:4000"
     }
   ],
   "components": {
