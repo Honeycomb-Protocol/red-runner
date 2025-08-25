@@ -23,18 +23,7 @@ public class UIDataConatainer
 public class ShopManager : MonoBehaviour, SocketEventListener
 {
     public static ShopManager Instance;
-
-    // --- WebView / UI ---
-    private WebViewObject webViewObject;
-    private GameObject webViewCanvas;
-    private Button closeWebViewButton;
-
-    // Reserve a top area so the native WebView (Android/WebGL) doesn't cover the close button.
-    [SerializeField] private int topBarHeightDp = 94;
-
-    // Track screen changes to reapply margins / reposition the close button
-    private int _lastW, _lastH;
-    private Rect _lastSafeArea;
+    private WebViewObject webViewObject;  // Declare the WebViewObject
 
     void Awake()
     {
@@ -47,129 +36,15 @@ public class ShopManager : MonoBehaviour, SocketEventListener
     void Start()
     {
         SocketController.Instance.AddListener(this);
-        CreateWebViewCanvasWithCloseButton();
-
+        // Initialize the WebViewObject
         webViewObject = new GameObject("WebViewObject").AddComponent<WebViewObject>();
-        // Parenting is fine (for lifecycle), the plugin still renders natively/overlay.
-        webViewObject.transform.SetParent(webViewCanvas.transform, false);
-
-#if UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX || UNITY_IOS
-        // Required by gree/unity-webview on Apple platforms
-        webViewObject.canvas = webViewCanvas;
-#endif
-        // Initialize trackers
-        _lastW = Screen.width;
-        _lastH = Screen.height;
-        _lastSafeArea = Screen.safeArea;
-        PositionCloseButton(); // place X correctly considering safe area
-    }
-
-    // Create overlay canvas + close button
-    private void CreateWebViewCanvasWithCloseButton()
-    {
-        webViewCanvas = new GameObject("WebViewCanvas");
-        var canvas = webViewCanvas.AddComponent<Canvas>();
-        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-        canvas.sortingOrder = 10000; // ensure on top of other Unity UI
-        webViewCanvas.AddComponent<CanvasScaler>(); // default: constant pixel size
-        webViewCanvas.AddComponent<GraphicRaycaster>();
-
-        // Close button
-        GameObject closeBtnObj = new GameObject("CloseWebViewButton");
-        closeBtnObj.transform.SetParent(webViewCanvas.transform, false);
-        closeWebViewButton = closeBtnObj.AddComponent<Button>();
-        var image = closeBtnObj.AddComponent<Image>();
-        image.color = new Color(0.8f, 0f, 0f, 0.85f);
-
-        RectTransform rect = closeBtnObj.GetComponent<RectTransform>();
-        rect.anchorMin = new Vector2(1, 1);
-        rect.anchorMax = new Vector2(1, 1);
-        rect.pivot = new Vector2(1, 1);
-        rect.sizeDelta = new Vector2(60, 60);
-        // anchored position set in PositionCloseButton() so we can include safe area
-
-        GameObject textObj = new GameObject("Text");
-        textObj.transform.SetParent(closeBtnObj.transform, false);
-        var txt = textObj.AddComponent<TextMeshProUGUI>();
-        txt.text = "✖";
-        txt.alignment = TextAlignmentOptions.Center;
-        txt.fontSize = 36;
-        txt.color = Color.white;
-        RectTransform txtRect = textObj.GetComponent<RectTransform>();
-        txtRect.anchorMin = Vector2.zero;
-        txtRect.anchorMax = Vector2.one;
-        txtRect.offsetMin = Vector2.zero;
-        txtRect.offsetMax = Vector2.zero;
-
-        // Make sure the close button is last in hierarchy within this canvas
-        closeBtnObj.transform.SetAsLastSibling();
-
-        closeWebViewButton.onClick.AddListener(CloseWebView);
-        webViewCanvas.SetActive(false);
-    }
-
-    private void ShowWebViewCanvas(bool show)
-    {
-        if (webViewCanvas != null)
-            webViewCanvas.SetActive(show);
-    }
-
-    private void CloseWebView()
-    {
-        if (webViewObject != null)
-            webViewObject.SetVisibility(false);
-        ShowWebViewCanvas(false);
-    }
-
-    // --- Safe area helpers / margins ---
-
-    private int GetSafeTopPx()
-    {
-#if UNITY_ANDROID || UNITY_IOS
-        var sa = Screen.safeArea;
-        // Distance from top edge to safe area top in pixels:
-        return Mathf.RoundToInt(Screen.height - sa.yMax);
-#else
-        return 0;
-#endif
-    }
-
-    private void PositionCloseButton()
-    {
-        if (closeWebViewButton == null) return;
-        var rect = closeWebViewButton.GetComponent<RectTransform>();
-
-        int safeTop = GetSafeTopPx();
-        // Keep ~20px from edges, add safe area on top (so it's not under the notch/status bar)
-        rect.anchoredPosition = new Vector2(-20f, -(20f + safeTop));
-    }
-
-    private void ApplyWebViewMargins()
-    {
-        if (webViewObject == null) return;
-
-        // Convert dp to pixels (approx; Unity doesn't expose dp)
-        float scale = (Screen.dpi > 0f) ? (Screen.dpi / 160f) : 1f;
-        int topBarPx = Mathf.RoundToInt(topBarHeightDp * scale);
-
-        int safeTop = GetSafeTopPx();
-
-        // Left, Top, Right, Bottom
-        webViewObject.SetMargins(0, topBarPx + safeTop, 0, 0);
-    }
-
-    private void LateUpdate()
-    {
-        // If resolution or safe area changes (rotation, resize), reapply
-        if (_lastW != Screen.width || _lastH != Screen.height || _lastSafeArea != Screen.safeArea)
+#if UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX
+        webViewObject.canvas = GameObject.Find("Canvas");
+        if (webViewObject.canvas == null)
         {
-            _lastW = Screen.width;
-            _lastH = Screen.height;
-            _lastSafeArea = Screen.safeArea;
-
-            PositionCloseButton();
-            ApplyWebViewMargins();
+            Debug.LogError("Canvas not found in the scene!");
         }
+#endif
     }
 
     [Header("Detail Panel UI")]
@@ -397,19 +272,18 @@ public class ShopManager : MonoBehaviour, SocketEventListener
             StopCoroutine(_loadCoroutine);
         }
     }
-
     public void MintNft(string itemName, bool withSol)
     {
-        GlobalCanvasManager.Instance.LoadingPanel.ShowPopup("Processing payment", 5,
-            new List<SocketEventsType> { SocketEventsType.paymentComplete });
-
+        GlobalCanvasManager.Instance.LoadingPanel.ShowPopup("Processing payment", 5, new List<SocketEventsType> { SocketEventsType.paymentComplete });
         Debug.Log("Item Name : " + itemName);
+        
         API_Manager.Instance.BuyNft(itemName, withSol, (success, message) =>
         {
             if (success)
             {
-                ShowWebViewCanvas(true);
                 _loadCoroutine = StartCoroutine(LoadWebView(message));
+                webViewObject.SetVisibility(true);
+
                 Debug.Log("Checkout URL: " + message);
             }
             else
@@ -437,19 +311,43 @@ public class ShopManager : MonoBehaviour, SocketEventListener
         API_Manager.Instance.GetShopData(GetAllShopData);
     }
 
-    // Load the page and make the webview visible
+    // Note: Load web view loads the page but wont make it visible.
+    // to do this, you must run SetVisibility(true);
     private IEnumerator LoadWebView(string Url)
     {
         webViewObject.Init(
-            cb: (msg) => { },
-            err: (msg) => { },
-            httpErr: (msg) => { },
-            started: (msg) => { },
-            hooked: (msg) => { },
-            cookies: (msg) => { },
+            cb: (msg) =>
+            {
+                // Debug.Log(string.Format("CallFromJS[{0}]", msg));
+            },
+            err: (msg) =>
+            {
+                // Debug.Log(string.Format("CallOnError[{0}]", msg));
+            },
+            httpErr: (msg) =>
+            {
+                // Debug.Log(string.Format("CallOnHttpError[{0}]", msg));
+            },
+            started: (msg) =>
+            {
+                // Debug.Log(string.Format("CallOnStarted[{0}]", msg));
+            },
+            hooked: (msg) =>
+            {
+                // Debug.Log(string.Format("CallOnHooked[{0}]", msg));
+            },
+            cookies: (msg) =>
+            {
+                // Debug.Log(string.Format("CallOnCookies[{0}]", msg));
+            },
             ld: (msg) =>
             {
+                // Debug.Log(string.Format("CallOnLoaded[{0}]", msg));
 #if UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX || UNITY_IOS
+                // NOTE: the following js definition is required only for UIWebView; if
+                // enabledWKWebView is true and runtime has WKWebView, Unity.call is defined
+                // directly by the native plugin.
+#if true
                 var js = @"
                     if (!(window.webkit && window.webkit.messageHandlers)) {
                         window.Unity = {
@@ -460,14 +358,72 @@ public class ShopManager : MonoBehaviour, SocketEventListener
                     }
                 ";
 #else
+                // NOTE: depending on the situation, you might prefer this 'iframe' approach.
+                // cf. https://github.com/gree/unity-webview/issues/189
+                var js = @"
+                    if (!(window.webkit && window.webkit.messageHandlers)) {
+                        window.Unity = {
+                            call: function(msg) {
+                                var iframe = document.createElement('IFRAME');
+                                iframe.setAttribute('src', 'unity:' + msg);
+                                document.documentElement.appendChild(iframe);
+                                iframe.parentNode.removeChild(iframe);
+                                iframe = null;
+                            }
+                        };
+                    }
+                ";
+#endif
+#elif UNITY_WEBPLAYER || UNITY_WEBGL
+                var js = @"
+                    window.Unity = {
+                        call:function(msg) {
+                            parent.unityWebView.sendMessage('WebViewObject', msg);
+                        }
+                    };
+                ";
+#else
                 var js = "";
 #endif
                 webViewObject.EvaluateJS(js + @"Unity.call('ua=' + navigator.userAgent)");
             }
-        );
+            //transparent: false,
+            //zoom: true,
+            //ua: "custom user agent string",
+            //radius: 0,  // rounded corner radius in pixel
+            //// android
+            //androidForceDarkMode: 0,  // 0: follow system setting, 1: force dark off, 2: force dark on
+            //// ios
+            //enableWKWebView: true,
+            //wkContentMode: 0,  // 0: recommended, 1: mobile, 2: desktop
+            //wkAllowsLinkPreview: true,
+            //// editor
+            //separated: false
+            );
+#if UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX
+        webViewObject.bitmapRefreshCycle = 1;
+        webViewObject.devicePixelRatio = 1;  // 1 or 2
+#endif
+        // cf. https://github.com/gree/unity-webview/pull/512
+        // Added alertDialogEnabled flag to enable/disable alert/confirm/prompt dialogs. by KojiNakamaru · Pull Request #512 · gree/unity-webview
+        //webViewObject.SetAlertDialogEnabled(false);
 
-        webViewObject.SetTextZoom(100);
-        ApplyWebViewMargins(); // <<< reserve the top area so the X is always visible
+        // cf. https://github.com/gree/unity-webview/pull/728
+        //webViewObject.SetCameraAccess(true);
+        //webViewObject.SetMicrophoneAccess(true);
+
+        // cf. https://github.com/gree/unity-webview/pull/550
+        // introduced SetURLPattern(..., hookPattern). by KojiNakamaru · Pull Request #550 · gree/unity-webview
+        //webViewObject.SetURLPattern("", "^https://.*youtube.com", "^https://.*google.com");
+
+        // cf. https://github.com/gree/unity-webview/pull/570
+        // Add BASIC authentication feature (Android and iOS with WKWebView only) by takeh1k0 · Pull Request #570 · gree/unity-webview
+        //webViewObject.SetBasicAuthInfo("id", "password");
+
+        //webViewObject.SetScrollbarsVisibility(true);
+
+        webViewObject.SetMargins(0, 0, 0, 0);
+        webViewObject.SetTextZoom(100);  // android only. cf. https://stackoverflow.com/questions/21647641/android-webview-set-font-size-system-default/47017410#47017410
 
 #if !UNITY_WEBPLAYER && !UNITY_WEBGL
         if (Url.StartsWith("http"))
@@ -476,14 +432,31 @@ public class ShopManager : MonoBehaviour, SocketEventListener
         }
         else
         {
-            var exts = new string[] { ".jpg", ".js", ".html" };
+            var exts = new string[]{
+                ".jpg",
+                ".js",
+                ".html"  // should be last
+            };
             foreach (var ext in exts)
             {
                 var url = Url.Replace(".html", ext);
                 var src = System.IO.Path.Combine(Application.streamingAssetsPath, url);
                 var dst = System.IO.Path.Combine(Application.temporaryCachePath, url);
                 byte[] result = null;
-                if (!src.Contains("://"))
+                if (src.Contains("://"))
+                {  // for Android
+#if UNITY_2018_4_OR_NEWER
+                    // NOTE: a more complete code that utilizes UnityWebRequest can be found in https://github.com/gree/unity-webview/commit/2a07e82f760a8495aa3a77a23453f384869caba7#diff-4379160fa4c2a287f414c07eb10ee36d
+                    var unityWebRequest = UnityEngine.Networking.UnityWebRequest.Get(src);
+                    yield return unityWebRequest.SendWebRequest();
+                    result = unityWebRequest.downloadHandler.data;
+#else
+                                       var www = new WWW(src);
+                                       yield return www;
+                                       result = www.bytes;
+#endif
+                }
+                else
                 {
                     result = System.IO.File.ReadAllBytes(src);
                 }
@@ -496,21 +469,13 @@ public class ShopManager : MonoBehaviour, SocketEventListener
             }
         }
 #else
-        if (Url.StartsWith("http"))
-        {
+        if (Url.StartsWith("http")) {
             webViewObject.LoadURL(Url.Replace(" ", "%20"));
-        }
-        else
-        {
+        } else {
             webViewObject.LoadURL("StreamingAssets/" + Url.Replace(" ", "%20"));
         }
 #endif
-
-        yield return null;
-
-        webViewObject.SetVisibility(true);
-        // Reapply margins in case resolution changed between init and first frame
-        ApplyWebViewMargins();
+        yield break;
     }
 
     public void RemoveListener()
@@ -536,7 +501,7 @@ public class ShopManager : MonoBehaviour, SocketEventListener
                 firstButtonString = "OK",
                 firstButtonCallBack = HidePopUp
             });
-            CloseWebView();
+            webViewObject.SetVisibility(false);
         }
         else if (messageHeader == SocketEventsType.paymentFailed)
         {
@@ -549,75 +514,7 @@ public class ShopManager : MonoBehaviour, SocketEventListener
                 firstButtonString = "OK",
                 firstButtonCallBack = HidePopUp
             });
-            CloseWebView();
+            webViewObject.SetVisibility(false);
         }
     }
-
-    // Optional: back key closes the webview on Android
-    private void Update()
-    {
-#if UNITY_ANDROID && !UNITY_EDITOR
-        if (webViewCanvas != null && webViewCanvas.activeSelf && Input.GetKeyDown(KeyCode.Escape))
-        {
-            CloseWebView();
-        }
-#endif
-    }
-
-    //  void OnGUI()
-    // {
-    //     var x = 10;
-
-    //     GUI.enabled = (webViewObject == null) ? false : webViewObject.CanGoBack();
-    //     if (GUI.Button(new Rect(x, 10, 80, 80), "<")) {
-    //         webViewObject?.GoBack();
-    //     }
-    //     GUI.enabled = true;
-    //     x += 90;
-
-    //     GUI.enabled = (webViewObject == null) ? false : webViewObject.CanGoForward();
-    //     if (GUI.Button(new Rect(x, 10, 80, 80), ">")) {
-    //         webViewObject?.GoForward();
-    //     }
-    //     GUI.enabled = true;
-    //     x += 90;
-
-    //     if (GUI.Button(new Rect(x, 10, 80, 80), "r")) {
-    //         webViewObject?.Reload();
-    //     }
-    //     x += 90;
-
-    //     GUI.TextField(new Rect(x, 10, 180, 80), "" + ((webViewObject == null) ? 0 : webViewObject.Progress()));
-    //     x += 190;
-
-    //     if (GUI.Button(new Rect(x, 10, 80, 80), "*")) {
-    //         var g = GameObject.Find("WebViewObject");
-    //         if (g != null) {
-    //             Destroy(g);
-    //         } else {
-    //             StartCoroutine(Start());
-    //         }
-    //     }
-    //     x += 90;
-
-    //     if (GUI.Button(new Rect(x, 10, 80, 80), "c")) {
-    //         webViewObject?.GetCookies(Url);
-    //     }
-    //     x += 90;
-
-    //     if (GUI.Button(new Rect(x, 10, 80, 80), "x")) {
-    //         webViewObject?.ClearCookies();
-    //     }
-    //     x += 90;
-
-    //     if (GUI.Button(new Rect(x, 10, 80, 80), "D")) {
-    //         webViewObject?.SetInteractionEnabled(false);
-    //     }
-    //     x += 90;
-
-    //     if (GUI.Button(new Rect(x, 10, 80, 80), "E")) {
-    //         webViewObject?.SetInteractionEnabled(true);
-    //     }
-    //     x += 90;
-    // }
 }
